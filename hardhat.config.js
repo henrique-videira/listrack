@@ -12,53 +12,6 @@ require ("hardhat-switch-network");
   networks: {
     hardhat: {
       gas: "auto",
-    },
-  mainnet: { 
-    url: '',
-    accounts: 
-    [ '',  // owner
-      '',  // alice
-      '',  // bob
-      '',  // charlie
-      '',  // debbie
-      '',  // eva
-      '']  // mike
-  },
-  alien:  {  // moonbeam
-    url: 'https://rpc.api.moonbase.moonbeam.network',
-    chainId: 1287,
-    accounts: 
-    [ '',  // owner
-      '',  // alice
-      '',  // bob
-      '',  // charlie
-      '',  // debbie
-      '',  // eva
-      '']  // mike
-  },
-  sepolia: {
-      url: 'https://sepolia.infura.io/v3/APIKEY',
-      chainId: 11155111,
-      accounts: 
-      [ '',  // owner
-        '',  // alice
-        '',  // bob
-        '',  // charlie
-        '',  // debbie
-        '',  // eva
-        '']  // mike
-    },
-  moonbeam: {  // moonbeam
-    url: 'https://rpc.api.moonbase.moonbeam.network',
-    chainId: 1287,
-    accounts: 
-    [ '',  // owner
-      '',  // alice
-      '',  // bob
-      '',  // charlie
-      '',  // debbie
-      '',  // eva
-      '']  // mike
-  }
+    }
   }
 };
