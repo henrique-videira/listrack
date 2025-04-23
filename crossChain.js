@@ -18,7 +18,11 @@ const providerRPC = {
   },
   sepolia: {
     name: 'sepolia',
-    rpc: 'https://sepolia.infura.io/v3/bdbe3f664e2c4fe09240e7c3cffa1f56', // Insert your RPC URL here
+    /// REQUIRED TO INSERT USER API!!!!!
+    /// REQUIRED TO INSERT USER API!!!!!
+    /// REQUIRED TO INSERT USER API!!!!!
+    rpc: 'https://sepolia.infura.io/v3/APIKEY', // Insert your RPC URL here
+    /// REQUIRED TO INSERT USER API!!!!!
     chainId: 11155111, 
   },
 };
@@ -34,14 +38,18 @@ const alien = new ethers.JsonRpcProvider(providerRPC.moonbeam.rpc, {
     name: providerRPC.sepolia.name,
   });
 
+// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
+// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
+// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
+// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
 const accounts =
-    [ '64fcd5bfca4beb158d341ea8729f3572409cd82b3dc8ee938747a3b109bf037e',  // owner
-      '95b4154d870c7f4d8be947b20c19eeec9ad5a6fc00fe9c2936fcf06c4149309f',  // alice
-      '355138760889ceb11307c098bad2da2414f57e580aa92c92295a196d96f985ef',  // bob
-      '3fc855b6cb5bb052c72bab7600dd5b4080c8f2fa0e331be242d2fb787719f018',  // charlie
-      'ba15b4f8659e6dbcba29e6ad21483f742d397a90ee9c88ab98bf89f88a58bebd',  // debbie
-      '21b07198907e720575b9590478110904c8788a3b508063cae003f0063e565827',  // eva
-      '2214a90679770647740e88a649c92f50a428f6fd2264820ecff0a0bb18b8d3b1']; // mike
+[ '',  // owner
+  '',  // alice
+  '',  // bob
+  '',  // charlie
+  '',  // debbie
+  '',  // eva
+  '']; // mike
 
       const ownerAlien = new ethers.Wallet(accounts[0], alien);
       const aliceAlien = new ethers.Wallet(accounts[1], alien);
@@ -417,27 +425,3 @@ const alfredAlien = alienSigners[0];
      CrossChainTransfer();
 
       
-          
-// signers and await tx.wait();
-
-
-
-// https://docs.moonbeam.network/builders/ethereum/libraries/ethersjs
-
-
-
-
-/*
- Deploying Every Contract in every chain
-#######################
-0x4Ca7BE74411B89e4737ef1594Ac47F33C9Ed7175     DrexToken
-#######################
-0x1352C77b6676b62b49D3eA78c8C887070eD44D63     AlienToken
-#######################
-0x5D24C726ce6062AfbC32AceeaF66D525f44354dB     Merkle
-#######################
-0x03898DAd231A2B9D9eCA58124Ab9e247AFb02bC8     Listrack
-#######################
-0x4F72A973dc2c10F664B5738b0Ca7Fd3f14f4bcEE     AlienListrack
-
-*/
