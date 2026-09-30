@@ -1,8 +1,9 @@
+const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const {expect} = require("chai");
 const { ethers } = require("hardhat");
 const { provider } = ethers.getDefaultProvider();
 
-const timeSlotDrex = 20; // in seconds
+const timeSlotDrex = 60; // in seconds (60 trades at one block per second need a wider window than 20 s)
 const drexLeg = 2; // in time slot
 const alienConfirmation = 3*drexLeg; // in time slot
 const alienExpiration = 2*alienConfirmation; // in time slot
@@ -77,8 +78,8 @@ async function InitialSetupFixture() {
   /* Setup for AlienListrack Contract */
   const factoryAlienListrack = await ethers.getContractFactory("AlienListrack");
   const alienListrack = await factoryAlienListrack.deploy(
-                                          alienConfirmation*timeSlotDrex, // this is the time slot in seconds
-                                          alienExpiration*timeSlotDrex);  // for alien listrack 
+                                          timeSlotDrex, // slot length in seconds (same clock as DrexListrack)
+                                          0);           // genesis timestamp: 0 = deployment time  // for alien listrack 
    
 // Approve Listrack to spend DrexToken
 for (let i = 0; i < drexSigners.length; i++) {
@@ -152,7 +153,8 @@ for (let i = 0; i < drexSigners.length; i++) {
        
         tradesToPushAlien.push([_drexHashFields,_alienAliceAddress,
           _alienMikeAddress,_alienTokencontract,_alienAmount,
-          _hashedSecret,_drexPreviousId,_drexTxIndex,_drexTxId,_drexAlienConfirmationIndex]);};
+          _hashedSecret,_drexPreviousId,_drexTxIndex,_drexTxId,_drexAlienConfirmationIndex,
+        temp[0][12] /* T_E */, temp[0][13] /* T_A */]);};
         }
   
     
@@ -173,7 +175,7 @@ for (let i = 0; i < drexSigners.length; i++) {
         tradesToPushAlien[i][2],tradesToPushAlien[i][3],
         tradesToPushAlien[i][4],tradesToPushAlien[i][5],
         tradesToPushAlien[i][6],tradesToPushAlien[i][7],
-        tradesToPushAlien[i][8]);
+        tradesToPushAlien[i][8],tradesToPushAlien[i][10],tradesToPushAlien[i][11]);
         txIdsAlienPushed.push(tradesToPushAlien[i][8]);
         }
         }
@@ -184,7 +186,9 @@ for (let i = 0; i < drexSigners.length; i++) {
   console.log ("** Trades Settled in Alien Chain **");
   
   // the array below is to store the alien features of the Tx Id settled in Alien Chain
-  TxValidation = [];
+  // Roots and proofs are served only for CLOSED slots: move the clock one slot on.
+await time.increase(timeSlotDrex);
+TxValidation = [];
   
   // array with slots to be searched
     slotNumber = [];
@@ -195,7 +199,8 @@ for (let i = 0; i < drexSigners.length; i++) {
       const merkleProof = await alienListrack.connect(alfredAlien).
                             createMerkleTree(alienFeatures[0],true,alienFeatures[1]);
     // below array contain the required data for alien tx validation
-      TxValidation[i] = [txIdsAlienPushed[i],alienFeatures[1],merkleProof,alienFeatures[0]];
+      TxValidation[i] = [txIdsAlienPushed[i],alienFeatures[1],merkleProof,alienFeatures[0],
+                        await alienListrack.getSlotSize(alienFeatures[0])]; // leaf count bound in the root
   
       // storing the slot numbers for validation in Merkle Contract
       // the array below contain all slots that require validation
@@ -255,7 +260,7 @@ it("Alice manually Settles Tx using Merkle Proof",
      for (let i=0; i<TxValidation.length; i++) {
       merkleProof = Object.values(TxValidation[i][2]);
      expect (await Listrack.connect(alfred)  // anyone can settle the Trade not only Alice
-                    .aliceSettleTrade(TxValidation[i][0],TxValidation[i][1],
+                    .aliceSettleTrade(TxValidation[i][0],TxValidation[i][1],TxValidation[i][4],
                      merkleProof,TxValidation[i][3],
                       '0x0000000000000000000000000000000000000000000000000000000000000000'))
               .to.emit(Listrack,"manualTradeSettled");
@@ -279,6 +284,7 @@ it("Alice manually Settles Tx using Merkle Proof",
 
     TxIdToSettle = [];
     TxIndexToSettle = [];
+    LeafCountToSettle = [];
     merkleProofArray = [];
     slotArray = [];
 
@@ -286,6 +292,7 @@ it("Alice manually Settles Tx using Merkle Proof",
     TxIdToSettle.push(TxValidation[i][0]);
     merkleProofArray.push(Object.values(TxValidation[i][2]));
     TxIndexToSettle.push(TxValidation[i][1]);
+    LeafCountToSettle.push(TxValidation[i][4]);
     slotArray.push(TxValidation[i][3]);
       }
 
@@ -297,6 +304,7 @@ it("Alice manually Settles Tx using Merkle Proof",
     expect (await merkleContract.connect(oliver) // oliver is a merkle signer
                        .validateSomeTxForSettlement(TxIdToSettle,    // txIds
                                                     TxIndexToSettle, // index
+                                                    LeafCountToSettle, // leaf count of each slot
                                                     merkleProofArray, // bidimensional array
                                                     slotArray, // slot number
                                                     Listrack.target)) // 

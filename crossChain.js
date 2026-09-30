@@ -146,8 +146,8 @@ const accounts =
 
     const factoryAlienListrack = new ethers.ContractFactory(abiAlienListrack, codeAlienListrack, ownerAlien); 
      const alienListrack = await factoryAlienListrack.deploy(
-      alienConfirmation*timeSlotDrex, // this is the time slot in seconds
-      alienExpiration*timeSlotDrex);  
+                                          timeSlotDrex, // slot length in seconds (same clock as DrexListrack)
+                                          0);           // genesis timestamp: 0 = deployment time  
    // const alienListrack = new ethers.Contract('0xAbFA5ad52d50924D2A756cedfBeC7F401BBDb2a6', abiAlienListrack, alien);
 
     console.log ('AlienListrack');
@@ -290,7 +290,8 @@ console.log ('');
    
     tradesToPushAlien.push([_drexHashFields,_alienAliceAddress,
       _alienMikeAddress,_alienTokencontract,_alienAmount,
-      _hashedSecret,_drexPreviousId,_drexTxIndex,_drexTxId,_drexAlienConfirmationIndex]);};
+      _hashedSecret,_drexPreviousId,_drexTxIndex,_drexTxId,_drexAlienConfirmationIndex,
+        temp[0][12] /* T_E */, temp[0][13] /* T_A */]);};
     }
 
   //  console.log ('Trades to push Alien | ' + tradesToPushAlien);
@@ -313,7 +314,7 @@ console.log ('');
     tradesToPushAlien[i][2],tradesToPushAlien[i][3],
     tradesToPushAlien[i][4],tradesToPushAlien[i][5],
     tradesToPushAlien[i][6],tradesToPushAlien[i][7],
-    tradesToPushAlien[i][8]);
+    tradesToPushAlien[i][8],tradesToPushAlien[i][10],tradesToPushAlien[i][11]);
     await (txAliceSettles.wait());
     txIdsAlienPushed.push(tradesToPushAlien[i][8]);
     }
@@ -326,6 +327,15 @@ console.log ('');
 
 //console.log ('Tx Ids Pushed',txIdsAlienPushed);
 
+// Roots and proofs are served only for CLOSED slots (and committee members should
+// additionally wait for E's finality): wait until the last leg's slot has closed.
+{
+  const lastLeg = await alienListrack.getTradeFeatures(txIdsAlienPushed[txIdsAlienPushed.length-1]);
+  while (!(await alienListrack.isSlotClosed(lastLeg[0]))) {
+    console.log ('>> Waiting for the alien slot to close');
+    await new Promise(r => setTimeout(r, 5000));
+  }
+}
 // the array below is to store the alien features of the Tx Id settled in Alien Chain
 TxValidation = [];
 
@@ -344,7 +354,8 @@ const alfredAlien = alienSigners[0];
     const merkleProof = await alienListrack.connect(alfredAlien).
                           createMerkleTree(alienFeatures[0],true,alienFeatures[1]);
     //console.log (merkleProof);
-    TxValidation[i] = [txIdsAlienPushed[i],alienFeatures[1],merkleProof,alienFeatures[0]];
+    TxValidation[i] = [txIdsAlienPushed[i],alienFeatures[1],merkleProof,alienFeatures[0],
+                        await alienListrack.getSlotSize(alienFeatures[0])]; // leaf count bound in the root
 
     // storing the slot numbers for validation in Merkle Contract
     if (slotNumber.indexOf(alienFeatures[0])==-1) slotNumber.push(alienFeatures[0]);
@@ -401,7 +412,7 @@ const alfredAlien = alienSigners[0];
     //console.log ('Slot Index',TxValidation[i][1]);
     //console.log ('Merkle Proof', merkleProof);
    const txDrexSettlement = await Listrack.connect(alice)
-                  .aliceSettleTrade(TxValidation[i][0],TxValidation[i][1],
+                  .aliceSettleTrade(TxValidation[i][0],TxValidation[i][1],TxValidation[i][4],
                    merkleProof,TxValidation[i][3],
                     '0x0000000000000000000000000000000000000000000000000000000000000000');
     await (txDrexSettlement).wait();

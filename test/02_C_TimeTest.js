@@ -78,8 +78,8 @@ async function InitialSetupFixture() {
   /* Setup for AlienListrack Contract */
   const factoryAlienListrack = await ethers.getContractFactory("AlienListrack");
   const alienListrack = await factoryAlienListrack.deploy(
-                                          alienConfirmation*timeSlotDrex, // this is the time slot in seconds
-                                          alienExpiration*timeSlotDrex);  // for alien listrack 
+                                          timeSlotDrex, // slot length in seconds (same clock as DrexListrack)
+                                          0);           // genesis timestamp: 0 = deployment time  // for alien listrack 
    
 // Approve Listrack to spend DrexToken
 for (let i = 0; i < drexSigners.length; i++) {
@@ -157,7 +157,8 @@ for (let i = 0; i < drexSigners.length; i++) {
        
         tradesToPushAlien.push([_drexHashFields,_alienAliceAddress,
           _alienMikeAddress,_alienTokencontract,_alienAmount,
-          _hashedSecret,_drexPreviousId,_drexTxIndex,_drexTxId,_drexAlienConfirmationIndex]);};
+          _hashedSecret,_drexPreviousId,_drexTxIndex,_drexTxId,_drexAlienConfirmationIndex,
+        temp[0][12] /* T_E */, temp[0][13] /* T_A */]);};
         }
   
     
@@ -175,7 +176,7 @@ for (let i = 0; i < drexSigners.length; i++) {
             // confirms if txId is not already pushed
         if (txIdsAlienPushed.indexOf(tradesToPushAlien[i][8])==-1) {
           // the below warrants that transactions are not expired
-          if (tradesToPushAlien[i][7]>=tradesToPushAlien[i][9]) { // not expired transactions
+          if (BigInt(await time.latest()) < tradesToPushAlien[i][10]) { // T_E not reached: leg still accepted on E
           // the below requirement splits the transactions in two to test Mike Revert
         //  if (i%2 == 0) { //only odd transactions to test MikeRevert in Drex Listrack
        await alienListrack.connect(alienSigners[j]).
@@ -184,7 +185,7 @@ for (let i = 0; i < drexSigners.length; i++) {
         tradesToPushAlien[i][2],tradesToPushAlien[i][3],
         tradesToPushAlien[i][4],tradesToPushAlien[i][5],
         tradesToPushAlien[i][6],tradesToPushAlien[i][7],
-        tradesToPushAlien[i][8]);
+        tradesToPushAlien[i][8],tradesToPushAlien[i][10],tradesToPushAlien[i][11]);
         txIdsAlienPushed.push(tradesToPushAlien[i][8]);
         //  } else { // the below block is for storing transactions to MiketoRevert
             // else of odd transactions
@@ -204,7 +205,9 @@ for (let i = 0; i < drexSigners.length; i++) {
   console.log ("** Trades Settled in Alien Chain **");
   
   // the array below is to store the alien features of the Tx Id settled in Alien Chain
-  TxValidation = [];
+  // Roots and proofs are served only for CLOSED slots: move the clock one slot on.
+await time.increase(timeSlotDrex);
+TxValidation = [];
   
   
   // array with slots to be searched
@@ -215,7 +218,8 @@ for (let i = 0; i < drexSigners.length; i++) {
                             .getTradeFeatures(txIdsAlienPushed[i]);
       const merkleProof = await alienListrack.connect(alfredAlien).
                             createMerkleTree(alienFeatures[0],true,alienFeatures[1]);
-      TxValidation[i] = [txIdsAlienPushed[i],alienFeatures[1],merkleProof,alienFeatures[0]];
+      TxValidation[i] = [txIdsAlienPushed[i],alienFeatures[1],merkleProof,alienFeatures[0],
+                        await alienListrack.getSlotSize(alienFeatures[0])]; // leaf count bound in the root
   
       // storing the slot numbers for validation in Merkle Contract
       if (slotNumber.indexOf(alienFeatures[0])==-1) slotNumber.push(alienFeatures[0]);
@@ -259,6 +263,7 @@ for (let i = 0; i < drexSigners.length; i++) {
 
     TxIdToSettle = [];
     TxIndexToSettle = [];
+    LeafCountToSettle = [];
     merkleProofArray = [];
     slotArray = [];
 
@@ -266,6 +271,7 @@ for (let i = 0; i < drexSigners.length; i++) {
     TxIdToSettle.push(TxValidation[i][0]);
     merkleProofArray.push(Object.values(TxValidation[i][2]));
     TxIndexToSettle.push(TxValidation[i][1]);
+    LeafCountToSettle.push(TxValidation[i][4]);
     slotArray.push(TxValidation[i][3]);
       }
 
@@ -275,6 +281,7 @@ for (let i = 0; i < drexSigners.length; i++) {
     expect (await merkleContract.connect(oliver) // oliver is a merkle signer
                        .validateSomeTxForSettlement(TxIdToSettle,    // txIds
                                                     TxIndexToSettle, // index
+                                                    LeafCountToSettle, // leaf count of each slot
                                                     merkleProofArray, // bidimensional array
                                                     slotArray, // slot number
                                                     Listrack.target)) // 

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24; 
 
     import {ReentrancyGuard} from "./utils/ReentrancyGuard.sol";
+    import {ListrackMerkle} from "./ListrackMerkle.sol";
 
     // import "./utils/console.sol";
 
@@ -180,10 +181,8 @@ pragma solidity ^0.8.24;
 
         alreadyVotedNewApprovers[_hash][msg.sender] = true;
         pollListNewApprovers[_hash] += approversWeightMap[msg.sender];
-
-        uint256 _multiplier = 10000/currentWeight;
         
-        if ((pollListNewApprovers[_hash]*_multiplier) >= (currentRatioApproval))
+        if ((pollListNewApprovers[_hash]*10000) >= (currentRatioApproval*currentWeight))
          {
             //console.log ("Consensus achieved");
           //console.log ("Current Ratio : ", (pollListNewApprovers[_hash]*_multiplier));
@@ -196,6 +195,9 @@ pragma solidity ^0.8.24;
 
 
           // the below statement converts the map pendingApprovers to Current Approvers
+          for (uint i=0 ; i < currentApprovers.length; i++) {
+            approversWeightMap [currentApprovers[i].pKey] = 0; // removed approvers lose their weight
+          }
           currentApprovers = pendingApprovers[_hash];  
           uint256 _cumulativeWeight = 0;
           for (uint i=0 ; i < currentApprovers.length; i++) {
@@ -223,14 +225,12 @@ pragma solidity ^0.8.24;
 
         //console.log ("Current vote for block: ", _alienBlock);
         //console.log ("Current weighted vote without multiplier: ", pollList[_alienBlock][_pendingMerkle]);
-
-        uint256 _multiplier = 10000/currentWeight;
         //console.log ("Current Weight ",currentWeight);
         //console.log ("Multiplier ", _multiplier);
         //console.log ("Current Weighted Vote ",pollList[_alienBlock][_pendingMerkle]*_multiplier);
 
         
-        if (((pollList[_alienBlock][_pendingMerkle]*_multiplier) >= currentRatioApproval)) {
+        if ((pollList[_alienBlock][_pendingMerkle]*10000) >= (currentRatioApproval*currentWeight)) {
           merkleHashesbyBlock[_alienBlock] = _pendingMerkle;  
           console.log ("Consensus achieved for Merkle Root");
           //console.log ("Current Weighted Vote : ", (pollList[_pendingMerkle][_alienBlock]*_multiplier));
@@ -263,7 +263,8 @@ pragma solidity ^0.8.24;
         }
     }
 
-     function validateSomeTxForSettlement (bytes32[] memory _txId, uint256[] memory _txIndex, 
+     function validateSomeTxForSettlement (bytes32[] memory _txId, uint256[] memory _txIndex,
+                                        uint256[] memory _leafCount,
                                         bytes32[][] memory _merkleProof, uint256[] memory _alienBlock, 
                                         address _drexListrack) external onlyOwner nonReentrant {
         //require (verifiedTxbyBlock[_alienBlock].length==0,
@@ -277,7 +278,7 @@ pragma solidity ^0.8.24;
         if (txMerkleDetails[_txId[i]].alienConfirmed) {
             _merkleValidated = true;
             } else {
-            _merkleValidated = validateMerkleProof(_txId[i], _txIndex[i], _merkleProof[i], _alienBlock[i]);
+            _merkleValidated = validateMerkleProof(_txId[i], _txIndex[i], _leafCount[i], _merkleProof[i], _alienBlock[i]);
             if (_merkleValidated) txMerkleDetails[_txId[i]].alienConfirmed = true;                   
             }
             // ATTENTION
@@ -306,61 +307,15 @@ pragma solidity ^0.8.24;
 
         */
 
+    // committed root of a full list of TxIds (same scheme as AlienListrack, see ListrackMerkle)
     function genMerkleTree(bytes32[] memory _transactions) public pure returns (bytes32) {
-
-    uint _numberTx = _transactions.length;
-    
-    bytes32[] memory _data = new bytes32[](_numberTx);
-    _data = _transactions;
-
-    require(_data.length > 0, "No data to create Merkle tree");
-
-
-    while (_data.length > 1) {
-    
-        bytes32[] memory temp = new bytes32[]((_data.length / 2) + (_data.length % 2));
-
-        
-        for (uint256 i = 0; i < _data.length; i += 2) {
-            // computing Hashes
-            if (i + 1 < _data.length) {
-            temp[i / 2] = keccak256(abi.encodePacked(_data[i], _data[i + 1]));
-            } else { // if there is an odd number of elements, hash the last one with itself
-            temp[i / 2] = keccak256(abi.encodePacked(_data[i], _data[i]));
-            }
-        }
-        _data = temp;
-    }
-    // https://volito.digital/implementing-a-merkle-tree-in-solidity-a-comprehensive-guide/
-    // the above merkle tree was adapted from the above link and corrected
-    // the merkle proof was also include in this code because it was not part of the original code
-    console.log ("Merkle Root");
-    console.logBytes32 (_data[0]);
-    return _data[0];
-
+        return ListrackMerkle.committedRoot(_transactions);
     }
 
-
-    function validateMerkleProof (bytes32 _txId, uint256 _txIndex, 
+    function validateMerkleProof (bytes32 _txId, uint256 _txIndex, uint256 _leafCount,
     bytes32[] memory _merkleProof, uint256 _alienBlock) private view returns (bool) {
-
-        bool _success = false;
-        
-        bytes32 _hash = _txId;
-
-        for (uint i=0; i < _merkleProof.length; i++) {
-            if (_txIndex % 2 == 0) {
-                _hash = keccak256(abi.encodePacked(_hash,_merkleProof[i]));
-            } else {
-                _hash = keccak256(abi.encodePacked(_merkleProof[i],_hash));
-            }
-            _txIndex /= 2;
-        }
-
-        if (merkleHashesbyBlock[_alienBlock] == _hash) {
-            _success = true;
-        } 
-        return (_success);
+        (bool _ok, bytes32 _root) = ListrackMerkle.computeRoot(_txId, _txIndex, _leafCount, _merkleProof);
+        return _ok && merkleHashesbyBlock[_alienBlock] != bytes32(0) && merkleHashesbyBlock[_alienBlock] == _root;
     }
 
     // function to revert txs in Listrack automatically
@@ -376,7 +331,7 @@ pragma solidity ^0.8.24;
         require (msg.value == valueServiceProvided, 
         "Value is not the exact value for the Service to confirm Tx by Merkle Contract");
 
-         (_success,)= payable(address(this)).call{value:msg.value}("");
+         _success = true; // msg.value is already held by this contract
 
         if (_success) {
             mempoolTx.push(_TxId);
@@ -409,4 +364,4 @@ pragma solidity ^0.8.24;
         
      }
 
-    
+    

@@ -1,1 +1,8 @@
 node_modules
+
+# local secrets
+listrack.env
+.env
+
+# local compiler shim (offline builds only)
+hardhat.local.js

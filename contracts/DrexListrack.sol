@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24; 
 
     import {ReentrancyGuard} from "./utils/ReentrancyGuard.sol";
+    import {ListrackMerkle} from "./ListrackMerkle.sol";
     import "hardhat/console.sol";
     //import "./utils/console.sol";
 
@@ -142,6 +143,11 @@ pragma solidity ^0.8.24;
         // status of the Tx, informing whether it is locked, settled,
         // position in the chain, previous TxId in Drex Chain and the slot number it belongs
         StatusChain statusChain;
+
+        // deadlines on E, computed at registration and bound into TxId:
+        // T_E (last moment Alice may write her leg) and T_A (hash-lock refund time)
+        uint256     alienDeadline;
+        uint256     alienRefundTime;
     }
 
     //** TIME VARIABLES **//
@@ -149,6 +155,9 @@ pragma solidity ^0.8.24;
     // time Slot mimics the behavior of creating blocks, classifying transactions
     // in groups that are clustered by time periods
     uint256 timeSlot;
+
+    // start of the genesis slot of the genesis-anchored slot clock
+    uint256 public genesisTimestamp;
 
     // Slot features containing 
     // currentSlotNumber, genesisSlot, lastTimeStamp and
@@ -178,7 +187,7 @@ pragma solidity ^0.8.24;
 
     // Mapping to track the trades
     // bytes 32 is TxId
-    mapping (bytes32 => Trade) public trades;
+    mapping (bytes32 => Trade) internal trades; // read through getDrexAlienInputsbyId
 
     // chain that registers Listrack transactions in Drex
     // this chain avoids double spending // this chain stores every Tx in Drex
@@ -260,6 +269,9 @@ pragma solidity ^0.8.24;
         slotProduction.genesisSlot = slotProduction.currentSlot;
         slotProduction.lowerLimitDrexIndexAlienConfirmation = 0;
         slotProduction.lastTimeStamp = block.timestamp;
+        genesisTimestamp = block.timestamp;
+        // C1: the settlement deadline T_S (70% of T_X) must leave room after T_E
+        require (((_listrackExpiration*7000)/10000) > _alienConfirmation, "Settlement window must exceed Alien Confirmation");
 
         slotHeadTxIndex[slotProduction.currentSlot] = 0;
 
@@ -332,12 +344,19 @@ pragma solidity ^0.8.24;
             )
         );  // _counter,
 
+        updateChain();
+        // deadlines on E, as timestamps of the genesis-anchored clock:
+        // T_E = registration slot start + alienConfirmation slots
+        // T_A = registration slot start + listrackExpiration slots (> T_S, condition C3)
+
         bytes32 _hashFieldsPosition = keccak256(
             abi.encodePacked(
                 _hashFields,
                 // hashedSecret is hashed here to avoid two identical txs in Pending Transactions
               _hashedSecret,
-               chainDrexTx.length
+               chainDrexTx.length,
+               alienDeadlineNow(),
+               alienRefundTimeNow()
             )
         );  // _counter,
 
@@ -362,7 +381,6 @@ pragma solidity ^0.8.24;
             )
         ); 
 
-        updateChain(); //CHANGED
 
         //console.log ("Hashes Ok | _hashFields :");
         //console.logBytes32 (_hashFields);
@@ -431,7 +449,9 @@ pragma solidity ^0.8.24;
             statusChain                 : StatusChain({ locked:false,settled:false,
                                                        chainPosition:chainDrexTx.length-1,
                                                         previousChainTxId : previousChainTxId, 
-                                                        slotNumber:slotProduction.currentSlot})
+                                                        slotNumber:slotProduction.currentSlot}),
+            alienDeadline               : alienDeadlineNow(),
+            alienRefundTime             : alienRefundTimeNow()
         }) ;
 
         //  console.log("Position of the Trade in the chain Id : ", 
@@ -490,7 +510,7 @@ pragma solidity ^0.8.24;
         // transfer to current smart contract
         if (trades[_txId].drexTokenAddress == address(0)) {
             require(msg.value == trades[_txId].drexAmount, "Incorrect DREX amount sent");
-            (_success,)= payable(address(this)).call{value: msg.value}("");
+            _success = true; // msg.value is already held by this contract
             } else {
             uint256 _allowance = IERC20(trades[_txId].drexTokenAddress).allowance(
                                 msg.sender,address(this));
@@ -519,117 +539,92 @@ pragma solidity ^0.8.24;
     }
 
         // Alice confirms a trade informing Merkle Tree
-        function aliceSettleTrade(bytes32 _txId, uint256 _txIndex, bytes32[] memory _merkleProof, 
-        uint256 _blockNumber, bytes32 _secretRevealed) public payable nonReentrant {
-        //returns (bool) {
-        // Important : anyone can settle the Transaction informing the Merkle Proof! 
-        // Any msg.sender, not only Alice, can send Tx for settlement
+        // Alice (or any relayer) settles by proof. _leafCount is the size of the slot's
+        // tree (AlienListrack.getSlotSize), which the committed root binds.
+        // The settlement window T_S applies in BOTH modes, so settlement on R can never
+        // race Mike's refund, which opens only at T_X > T_S (condition C2).
+        function aliceSettleTrade(bytes32 _txId, uint256 _txIndex, uint256 _leafCount,
+        bytes32[] memory _merkleProof, uint256 _blockNumber, bytes32 _secretRevealed)
+        public payable nonReentrant {
         bool success = false;
         Trade memory trade = trades[_txId];
-
         require(trade.aliceDrexAddress != address(0), "Trade does not exist");
         require(trade.statusChain.locked, "Trade is not locked");
         require(!trade.statusChain.settled, "Trade already settled");
-
-        require (validateMerkleProof (_txId, _txIndex, _merkleProof,_blockNumber),
-        "Transaction not settled in Alien Chain");
-
-        // verifying Hashed Secret
-        if (trade.hashedSecret!=bytes32(0)) {
         updateChain();
+        require(withinSettlementWindow(trade.statusChain.slotNumber), "Alien Leg already expired");
+        require (validateMerkleProof (_txId, _txIndex, _leafCount, _merkleProof, _blockNumber),
+        "Transaction not settled in Alien Chain");
+        if (trade.hashedSecret!=bytes32(0)) {
         require (keccak256(abi.encodePacked(_secretRevealed)) == trade.hashedSecret,
          "Secret Hashed is not equal to Hashed Secret of the Transaction");
-          // verifying if transaction is not expired yet for Alien Leg Expiration using 70% of time
-        
-        console.log ("Current Slot :",slotProduction.currentSlot);
-        console.log ("Tx Slot :", trades[_txId].statusChain.slotNumber);
-        console.log ("HTLC Expiration :",  (((listrackExpiration*7000))/10000));
-
-        require((slotProduction.currentSlot-trades[_txId].statusChain.slotNumber)
-                < (((listrackExpiration*7000))/10000) ,"Alien Leg already expired");
-        
         }
-        
-        // transfer Mike Drex to Alice Drex Address
+        trades[_txId].statusChain.settled = true; // Mark the trade as settled
+        trades[_txId].statusChain.locked = false; // There are no more locked assets in Listrack
         if (trade.drexTokenAddress == address(0)) {
             (success,)= payable(trade.aliceDrexAddress).call{value: trade.drexAmount}("");
             } else {
             success = IERC20(trade.drexTokenAddress).transfer(payable(trade.aliceDrexAddress),
             trade.drexAmount);
             }
-
-        if (success) {
-        trades[_txId].statusChain.settled = true; // Mark the trade as settled
-        trades[_txId].statusChain.locked = false; // There are no more locked assets in Listrack
-            if (trade.hashedSecret!=bytes32(0)) {
-                    emit manualSecretTradeSettled (_txId,_secretRevealed);
-            } else  emit manualTradeSettled (_txId);
-            
-        } else {
-            console.log ("Transaction Failed | Id below");
-            console.logBytes32(_txId);
-            revert("Transaction settlement failed");
-        }
-        //return (success);
+        require(success, "Transaction settlement failed");
+        if (trade.hashedSecret!=bytes32(0)) {
+            emit manualSecretTradeSettled (_txId,_secretRevealed);
+        } else  emit manualTradeSettled (_txId);
     }
 
-    function sendTxForSettlement(bytes32[] memory _transactions) 
-    external payable nonReentrant // returns (bool[] memory) 
-        { 
-        // this function allows a Merkle Contract to send multiple transactions
-        // to be automatically settled
-        // require that msg.sender = a specific Merkle Contract
-        // bool[] memory success = new bool[](_transactions.length);
+    // settlement deadline T_S = 70% of T_X, counted in slots from registration
+    function withinSettlementWindow (uint256 _registrationSlot) private view returns (bool) {
+        return (slotProduction.currentSlot - _registrationSlot) < ((listrackExpiration*7000)/10000);
+    }
 
+    // start time of a slot of the genesis-anchored clock
+    function slotStartTime (uint256 _slot) public view returns (uint256) {
+        return genesisTimestamp + (_slot - slotProduction.genesisSlot) * timeSlot;
+    }
+
+    // T_E and T_A for a trade registered in the current slot (see setTrade)
+    function alienDeadlineNow () private view returns (uint256) {
+        return slotStartTime(slotProduction.currentSlot) + alienConfirmation*timeSlot;
+    }
+    function alienRefundTimeNow () private view returns (uint256) {
+        return slotStartTime(slotProduction.currentSlot) + listrackExpiration*timeSlot;
+    }
+
+    // current slot of the genesis-anchored clock
+    function slotNow () public view returns (uint256) {
+        return slotProduction.genesisSlot + (block.timestamp - genesisTimestamp) / timeSlot;
+    }
+
+    // Batch settlement submitted by a nominated committee contract after it has
+    // verified the trades against its own stored root (MerkleContract).
+    function sendTxForSettlement(bytes32[] memory _transactions)
+    external payable nonReentrant
+        {
+        updateChain();
         for (uint256 i=0; i< _transactions.length ; i++) {
-            
-        // success[i] = false;
         bool _success = false;
-         // it verifies whether the sending contract to this function
-         // is a valid Merkle Contract authorized by both parties   
-        if (isValidMerkleContract(_transactions[i],msg.sender)) {
+        if (!isValidMerkleContract(_transactions[i],msg.sender)) continue;
         Trade memory trade = trades[_transactions[i]];
-
-        if (trade.hashedSecret != bytes32(0)) continue; 
-        // Automatic Settlement not allowed for HTLC - goes to next transaction
-
-        if (trade.aliceDrexAddress == address(0)) continue; 
-        // Trade does not exist - goes to next transaction
-
-        if (!trade.statusChain.locked) continue; 
-        // Trade must be locked - goes to next transaction
-
+        if (trade.hashedSecret != bytes32(0)) continue; // hash-lock trades need the secret
+        if (trade.aliceDrexAddress == address(0)) continue;
+        if (!trade.statusChain.locked) continue;
         if (trade.statusChain.settled) continue;
-        // Trade already settled - goes to next transaction
-
-        // transfer Mike Drex to Alice Drex Address through current smart contract
+        if (!withinSettlementWindow(trade.statusChain.slotNumber)) continue; // T_S passed
+        trades[_transactions[i]].statusChain.settled = true;
+        trades[_transactions[i]].statusChain.locked = false;
         if (trade.drexTokenAddress == address(0)) {
             (_success,)= payable(trade.aliceDrexAddress).call{value: trade.drexAmount}("");
             } else {
             _success = IERC20(trade.drexTokenAddress).transfer(payable(trade.aliceDrexAddress),trade.drexAmount);
             }
-
         if (_success) {
-        trades[_transactions[i]].statusChain.settled = true; // Mark the trade as settled
-        trades[_transactions[i]].statusChain.locked = false; // There are no more locked assets in Listrack
-         emit automaticTradeSettled(_transactions[i]);
-
-         // the below statemente assumes that the Merkle Contract is being capable
-         // of reading the alienstate due to having success in confirming alien Txs
-         /*
-         if (trade.statusChain.slotNumber > lastConfirmedSlotByMerkleContract[msg.sender]) {
-         lastConfirmedSlotByMerkleContract[msg.sender] = trade.statusChain.slotNumber;
-         // the above statement updates the last confirmed block by the msg.sender Merkle Contract
-         }
-         */
-        } 
+            emit automaticTradeSettled(_transactions[i]);
+        } else {
+            trades[_transactions[i]].statusChain.settled = false;
+            trades[_transactions[i]].statusChain.locked = true;
         }
         }
-        // revertTxsbyMerkleContract (msg.sender);
-        // the above statement automatically reverts old 
-        // transactions that are expired in this Merkle Contract
-        // returning funds to Mike
-        // return (success);
     }
 
     // function to revert Mike locked Funds whether funds have expired due to
@@ -675,66 +670,41 @@ pragma solidity ^0.8.24;
     function revertTransaction (bytes32 _txId) private
         returns (bool) {
         bool success = false;
-
-        // require cannot be used below because it would stop
-        // the loop from Merkle Contract in revertTxsByMerkleContract
-        // Transaction must be locked
-        if (trades[_txId].statusChain.locked==true) { 
-            //Transaction cannot be already settled
-            if (trades[_txId].statusChain.settled==false) { 
-                if (trades[_txId].drexTokenAddress == address(0)) {
-                    (success,)= payable(trades[_txId].mikeDrexAddress).call
-                    {value:trades[_txId].drexAmount}("");
-                } else {
-                    success = IERC20(trades[_txId].drexTokenAddress).transfer(
-                    payable(trades[_txId].mikeDrexAddress),
-                    trades[_txId].drexAmount);
-                }
-        if (success) emit tradeReverted(_txId);
-        }
+        StatusChain storage _st = trades[_txId].statusChain;
+        if (_st.locked && !_st.settled &&
+            (slotProduction.currentSlot - _st.slotNumber) >= listrackExpiration) {
+            // state first: a refunded trade can be neither refunded again nor settled
+            _st.locked = false;
+            if (trades[_txId].drexTokenAddress == address(0)) {
+                (success,)= payable(trades[_txId].mikeDrexAddress).call
+                {value:trades[_txId].drexAmount}("");
+            } else {
+                success = IERC20(trades[_txId].drexTokenAddress).transfer(
+                payable(trades[_txId].mikeDrexAddress),
+                trades[_txId].drexAmount);
+            }
+            if (success) emit tradeReverted(_txId);
+            else _st.locked = true; // transfer failed: leave the trade refundable
         }
         return (success);
     }
     
     function revertTxsbyMerkleContract (address _merkleContract)
-    // this function reverts transactions that are expired in the Merkle Contract
-    // based on the last confirmed block by the Merkle Contract
-    // this is done rather than unlocking several transactions simultaneously
-    // due to gas costs in Drex that should be charged to a Merkle Contract
     external nonReentrant {
-       // uint256 _drexConfirmedSlotNumber = lastConfirmedSlotByMerkleContract[_merkleContract];
-        uint256 _upperLimitSlotToRevert = slotProduction.currentSlot-listrackExpiration;
-        uint256 _lastSlotReverted = lastRevertedSlotByMerkleContract[_merkleContract];
-       // console.log (">> Upper Slot Limit to Revert", _upperLimitSlotToRevert);
-       // console.log (">> lastRevertedSlotByMerkleContract ", lastRevertedSlotByMerkleContract[_merkleContract]);
-        if (_upperLimitSlotToRevert > lastRevertedSlotByMerkleContract[_merkleContract]) {
-        // this conditional verifies whether time has passed through avoiding unnecessary calls
-       // console.log ("Automatically Reverting started");
-        for (uint256 i = lastRevertedSlotByMerkleContract[_merkleContract]+1; 
-                i<=_upperLimitSlotToRevert; i++) { // loop iterating through blocks not reverted
-         //   console.log ("Number of slot to Revert", i );
-           // console.log ("Number of Txs to Revert", merkleContractRevert[_merkleContract][i].length);
-            for (uint256 j=0 ; j < merkleContractRevert[_merkleContract][i].length ; j++) {
-                // loop iterating through transactions to revert in each block
-            bool _success = false;
-            // merkleContractRevert is a mapping that stores for each Merkle Contract one specific Block
-            // that contain all expiring TxIds that are expiring in that block
-          //  console.log ("Tx to Revert :");
-          //  console.logBytes32 (merkleContractRevert[_merkleContract][i][j]);
-            _success = revertTransaction (merkleContractRevert[_merkleContract][i][j]);  
-             if ((_success) && (i > _lastSlotReverted)) _lastSlotReverted = i;
+        // Batch refund of expired plain-mode trades that nominated _merkleContract.
+        // Trades are indexed by their refund slot s0 + T_X, so every index up to the
+        // current slot is due.
+        updateChain();
+        uint256 _upperLimitSlotToRevert = slotProduction.currentSlot;
+        uint256 _from = lastRevertedSlotByMerkleContract[_merkleContract] + 1;
+        if (_from < slotProduction.genesisSlot) _from = slotProduction.genesisSlot;
+        for (uint256 i = _from; i <= _upperLimitSlotToRevert; i++) {
+            for (uint256 j = 0; j < merkleContractRevert[_merkleContract][i].length; j++) {
+                revertTransaction(merkleContractRevert[_merkleContract][i][j]);
             }
-                }
-        lastRevertedSlotByMerkleContract[_merkleContract] = _lastSlotReverted;   
-       // console.log ("Last Slot Reverted:", _lastSlotReverted);
         }
-        /*
-        console.log ('#######################');
-        bytes32 _hashedSecret = keccak256(abi.encodePacked('Listrack'));  // _counter,)
-        console.logBytes32(_hashedSecret);
-        console.logBytes32(keccak256(abi.encodePacked(_hashedSecret))); 
-        */
-
+        if (_upperLimitSlotToRevert > lastRevertedSlotByMerkleContract[_merkleContract])
+            lastRevertedSlotByMerkleContract[_merkleContract] = _upperLimitSlotToRevert;
     }
 
     function isValidMerkleContract (bytes32 _txId, address _merkleContract)
@@ -750,37 +720,20 @@ pragma solidity ^0.8.24;
     }
 
 
-    function validateMerkleProof (bytes32 _txId, uint256 _txIndex, 
+    // Folds the proof into the committed slot root (ListrackMerkle) and accepts it if
+    // ANY nominated committee has stored that root for the slot (OR rule: safety is
+    // that of the weakest nominated committee, liveness that of the strongest).
+    function validateMerkleProof (bytes32 _txId, uint256 _txIndex, uint256 _leafCount,
     bytes32[] memory _merkleProof, uint256 _blockNumber) public view returns (bool) {
-
-        bytes32 _hash = _txId;
-        bool _success = false;
-        bytes4 _successfullCall = bytes4(0);
+        (bool _ok, bytes32 _root) = ListrackMerkle.computeRoot(_txId, _txIndex, _leafCount, _merkleProof);
+        if (!_ok) return false;
         bytes4 _magicNumber = 0x1626ba7e;
-        bytes32 _returnedRoot;
-
-         for (uint i=0; i < _merkleProof.length; i++) {
-            if (_txIndex % 2 == 0) {
-                _hash = keccak256(abi.encodePacked(_hash,_merkleProof[i]));
-            } else {
-                _hash = keccak256(abi.encodePacked(_merkleProof[i],_hash));
-            }
-            _txIndex /= 2;
+        for (uint256 i = 0; i < trades[_txId].drexMerkleContract.length; i++) {
+            (bytes4 _successfullCall, bytes32 _returnedRoot) =
+                IgetMerkleRoot(trades[_txId].drexMerkleContract[i]).getRootByBlock(_blockNumber);
+            if (_successfullCall == _magicNumber && _returnedRoot == _root) return true;
         }
-
-        for (uint256 i=0 ; (i < trades[_txId].drexMerkleContract.length) && 
-                            (!((_successfullCall==_magicNumber)&&(_returnedRoot==_hash))) ; i++) {
-            (_successfullCall, _returnedRoot) = 
-            IgetMerkleRoot(trades[_txId].drexMerkleContract[i]).getRootByBlock(_blockNumber);
-        }
-
-        if (_successfullCall==_magicNumber && _returnedRoot == _hash) {
-            _success = true;
-            console.log ("**Merkle Proof Ok");
-        } 
-        return (_success);
-      //  return (trades[_txId]);
-      //  merkleContract is the address that contains the verified hash subject to node consensus
+        return false;
     }
 
     function  storeTxIdPerMerkleContractToRevert (bytes32 _txId) private {
@@ -824,12 +777,12 @@ pragma solidity ^0.8.24;
 
         console.log ("Current Slot: ", slotProduction.currentSlot);
 
-        if (_ellapsedTime>=timeSlot) {
+        if (slotNow() > slotProduction.currentSlot) {
         console.log (">>> Creating new time slot");
         // for each new slot produced the head of the slot is written
         // console.log ("Creating new time slot");
         console.log (">>> Old Slot: ", slotProduction.currentSlot);   
-        slotProduction.currentSlot+= ((_ellapsedTime*1000000)/timeSlot)/1000000;
+        slotProduction.currentSlot = slotNow(); // genesis-anchored: no drift across empty slots
         // it increases the slot time by one in order to classify transactions
         console.log (">>> New Slot after Ellapsed Time Update: ", slotProduction.currentSlot);
 
@@ -894,4 +847,4 @@ pragma solidity ^0.8.24;
         }
     }
 
-}
+}
