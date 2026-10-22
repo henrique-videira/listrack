@@ -1,21 +1,23 @@
 {
   "name": "listrack-hardhat",
   "version": "1.0.0",
-  "description": "",
+  "description": "Listrack: payment-versus-payment settlement between a regulated ledger and external blockchains without third-party intermediaries",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "hardhat test",
+    "gas": "REPORT_GAS=true hardhat test",
+    "bench": "hardhat run scripts/bench.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/henrique-videira/Alien_Listrack.git"
+    "url": "git+https://github.com/henrique-videira/listrack.git"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "Henrique de Carvalho Videira",
+  "license": "MIT",
   "bugs": {
-    "url": "https://github.com/henrique-videira/Alien_Listrack/issues"
+    "url": "https://github.com/henrique-videira/listrack/issues"
   },
-  "homepage": "https://github.com/henrique-videira/Alien_Listrack#readme",
+  "homepage": "https://github.com/henrique-videira/listrack#readme",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@openzeppelin/contracts": "^5.1.0",
