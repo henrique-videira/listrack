@@ -42,6 +42,8 @@ REPORT_GAS=true npx hardhat test    # gas table (paper, Table 3)
 npx hardhat run scripts/bench.js    # tree and proof scaling (paper, Section 8.3)
 ```
 
-For the testnet run, copy `listrack.env.example` to `listrack.env` and insert your RPC
-URL and keys in `crossChain.js`. The script now waits for the external slot to close
-before building proofs.
+For the testnet run, copy `listrack.env.example` to `listrack.env` and set your own
+`DREX_RPC_URL` (for example an Infura or Alchemy Sepolia URL with your own API key) and
+seven test-network `PRIVATE_KEYS`. `crossChain.js` reads them from that file, which is
+git-ignored; no RPC URL, API key or private key is stored in the repository. The script
+waits for the external slot to close before building proofs.

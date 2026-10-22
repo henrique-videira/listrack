@@ -9,21 +9,29 @@ const alienExpiration = 2*alienConfirmation; // in time slot
 
 const equalbalance = 1000000000000000000000n;
 //console.log (equalbalance)
-// 2. Define network configurations
+// 2. Network configuration and keys are read from listrack.env (git-ignored).
+//    Copy listrack.env.example to listrack.env and fill in your own RPC URLs
+//    and test-network private keys. Nothing secret is stored in this repository.
+require('dotenv').config({ path: 'listrack.env' });
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing ${name}: copy listrack.env.example to listrack.env and set it`);
+  }
+  return value;
+}
+
 const providerRPC = {
   moonbeam: {
     name: 'moonbeam',
-    rpc: 'https://rpc.api.moonbase.moonbeam.network', // Insert your RPC URL here
-    chainId: 1287, 
+    rpc: process.env.ALIEN_RPC_URL || 'https://rpc.api.moonbase.moonbeam.network', // public Moonbase Alpha endpoint
+    chainId: Number(process.env.ALIEN_CHAIN_ID || 1287),
   },
   sepolia: {
     name: 'sepolia',
-    /// REQUIRED TO INSERT USER API!!!!!
-    /// REQUIRED TO INSERT USER API!!!!!
-    /// REQUIRED TO INSERT USER API!!!!!
-    rpc: 'https://sepolia.infura.io/v3/APIKEY', // Insert your RPC URL here
-    /// REQUIRED TO INSERT USER API!!!!!
-    chainId: 11155111, 
+    rpc: required('DREX_RPC_URL'), // your own Sepolia RPC URL, e.g. from Infura or Alchemy
+    chainId: Number(process.env.DREX_CHAIN_ID || 11155111),
   },
 };
 // 3. Create ethers provider
@@ -38,18 +46,12 @@ const alien = new ethers.JsonRpcProvider(providerRPC.moonbeam.rpc, {
     name: providerRPC.sepolia.name,
   });
 
-// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
-// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
-// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
-// MUST INSERT PRIVATE KEYS FOR EACH OF THE ACCOUNTS!!
-const accounts =
-[ '',  // owner
-  '',  // alice
-  '',  // bob
-  '',  // charlie
-  '',  // debbie
-  '',  // eva
-  '']; // mike
+// Seven test-network private keys, comma-separated, in this order:
+// owner, alice, bob, charlie, debbie, eva, mike
+const accounts = required('PRIVATE_KEYS').split(',').map(k => k.trim());
+if (accounts.length !== 7) {
+  throw new Error('PRIVATE_KEYS must list exactly 7 keys: owner, alice, bob, charlie, debbie, eva, mike');
+}
 
       const ownerAlien = new ethers.Wallet(accounts[0], alien);
       const aliceAlien = new ethers.Wallet(accounts[1], alien);
